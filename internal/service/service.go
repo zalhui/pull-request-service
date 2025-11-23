@@ -12,14 +12,12 @@ import (
 )
 
 var (
-	ErrTeamExists   = errors.New("team already exists")
-	ErrTeamNotFound = errors.New("team not found")
-	ErrUserNotFound = errors.New("user not found")
-	ErrPRExists     = errors.New("PR already exists")
-	ErrPRMerged     = errors.New("PR is merged")
-	ErrNotAssigned  = errors.New("reviewer not assigned")
-	ErrNoCandidate  = errors.New("no active replacement candidate")
-	ErrPRNotFound   = errors.New("PR not found")
+	ErrTeamExists  = errors.New("team already exists")
+	ErrPRExists    = errors.New("PR already exists")
+	ErrPRMerged    = errors.New("PR is merged")
+	ErrNotAssigned = errors.New("reviewer not assigned")
+	ErrNoCandidate = errors.New("no active replacement candidate")
+	ErrNotFound    = errors.New("resource not found")
 )
 
 type Service struct {
@@ -64,7 +62,7 @@ func (s *Service) GetTeam(ctx context.Context, teamName string) (*models.Team, e
 
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil, ErrTeamNotFound
+			return nil, ErrNotFound
 		}
 
 		s.log.Errorw("Failed to get team", "team_name", teamName, "error", err)
@@ -81,7 +79,7 @@ func (s *Service) UpdateUserActivity(ctx context.Context, userID string, isActiv
 	user, err := s.repo.UpdateUserActivity(ctx, userID, isActive)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil, ErrUserNotFound
+			return nil, ErrNotFound
 		}
 		s.log.Errorw("Failed to update user activity", "user_id", userID, "error", err)
 		return nil, fmt.Errorf("update user %s activity to %t: %w", userID, isActive, err)
@@ -109,7 +107,7 @@ func (s *Service) CreatePullRequest(ctx context.Context, prCreate *models.PullRe
 	author, err := s.repo.GetUser(ctx, prCreate.AuthorID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil, ErrUserNotFound
+			return nil, ErrNotFound
 		}
 		s.log.Errorw("Failed to get author", "author_id", prCreate.AuthorID, "error", err)
 		return nil, fmt.Errorf("get author %s: %w", prCreate.AuthorID, err)
@@ -147,7 +145,7 @@ func (s *Service) MergePullRequest(ctx context.Context, prID string) (*models.Pu
 	pr, err := s.repo.GetPullRequest(ctx, prID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil, ErrPRNotFound
+			return nil, ErrNotFound
 		}
 		s.log.Errorw("Failed to get pr", "pr_id", prID, "error", err)
 		return nil, fmt.Errorf("get pr %s: %w", prID, err)
@@ -176,7 +174,7 @@ func (s *Service) ReassignReviewer(ctx context.Context, prID string, oldReviewer
 	pr, err := s.repo.GetPullRequest(ctx, prID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil, "", ErrPRNotFound
+			return nil, "", ErrNotFound
 		}
 		s.log.Errorw("Failed to get pr", "pr_id", prID, "error", err)
 		return nil, "", fmt.Errorf("reassign pr %s: %w", prID, err)
@@ -195,7 +193,7 @@ func (s *Service) ReassignReviewer(ctx context.Context, prID string, oldReviewer
 	oldReviewer, err := s.repo.GetUser(ctx, oldReviewerID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil, "", ErrUserNotFound
+			return nil, "", ErrNotFound
 		}
 		s.log.Errorw("Failed to get old reviewer", "old_reviewer_id", oldReviewerID, "error", err)
 		return nil, "", fmt.Errorf("reassign pr %s: %w", prID, err)
@@ -239,7 +237,7 @@ func (s *Service) GetUserReviewPRs(ctx context.Context, userID string) ([]models
 	_, err := s.repo.GetUser(ctx, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil, ErrUserNotFound
+			return nil, ErrNotFound
 		}
 		s.log.Errorw("Failed to get user", "user_id", userID, "error", err)
 		return nil, fmt.Errorf("get user %s: %w", userID, err)
