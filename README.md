@@ -1,8 +1,7 @@
 # Сервис назначения ревьюеров для Pull Request’ов
-
-# PR Reviewer Assignment Service
-
 Микросервис для автоматического назначения ревьюверов на Pull Request'ы внутри команд.
+
+*при разработке я намеренно оставил возможность клиенту генерировать ID пользоваталей и pull request'ов, так как это соответствует предоставленной OpenAPI-спецификации, а также упрощает ручное тестирование и демонстрацию*
 
 ## Стек
 - **Backend**: Go 1.25.0
@@ -71,6 +70,55 @@ pull_request_reviewers (pull_request_id FK, user_id FK) -- many-to-many
 | **POST** | `/pullRequest/create` | Создание PR с автоназначением ревьюверов |
 | **POST** | `/pullRequest/merge` | Мерж PR (идемпотентная операция) |
 | **POST** | `/pullRequest/reassign` | Переназначение ревьювера в PR |
+| **GET** | `/stats` | Возвращает статистику по сервису для мониторинга и анализа |
+
+## Описание статистики 
+
+Статистика включает в себя общее количество пользователей, активных пользователей, команд, pull request'ов и топ-5 ревьюеров(позволяет выявить кто перегружен).
+
+Получить статистику:
+```bash
+curl http://localhost:8080/stats
+```
+
+Ответ:
+```json
+{
+    "total_users": 9,
+    "active_users": 8,
+    "total_teams": 3,
+    "total_prs": 2,
+    "open_prs": 2,
+    "merged_prs": 0,
+    "top_reviewers": [
+        {
+            "user_id": "z2",
+            "username": "Bob",
+            "review_count": 1
+        },
+        {
+            "user_id": "u3",
+            "username": "Charlie",
+            "review_count": 1
+        },
+        {
+            "user_id": "z3",
+            "username": "Charlie",
+            "review_count": 1
+        },
+        {
+            "user_id": "u4",
+            "username": "David",
+            "review_count": 1
+        },
+        {
+            "user_id": "u6",
+            "username": "Frank",
+            "review_count": 0
+        }
+    ]
+}
+```
 
 ## Примеры запросов
 ### Создать команду
@@ -156,3 +204,5 @@ curl -X POST http://localhost:8080/pullRequest/merge \
 Все ошибки возвращаются в формате OpenAPI спецификации
 
 Операция мержа PR идемпотентна
+
+Добавлен эндпоинт статистики

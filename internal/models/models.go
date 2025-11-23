@@ -47,3 +47,19 @@ type PullRequestShort struct {
 	AuthorID        string `json:"author_id"`
 	Status          string `json:"status"`
 }
+
+type Stats struct {
+	TotalUsers   int           `json:"total_users"`
+	ActiveUsers  int           `json:"active_users"`
+	TotalTeams   int           `json:"total_teams"`
+	TotalPRs     int           `json:"total_prs"`
+	OpenPRs      int           `json:"open_prs"`
+	MergedPRs    int           `json:"merged_prs"`
+	TopReviewers []TopReviewer `json:"top_reviewers"`
+}
+
+type TopReviewer struct {
+	UserID      string `json:"user_id"`
+	Username    string `json:"username"`
+	ReviewCount int    `json:"review_count"`
+}
