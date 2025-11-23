@@ -13,7 +13,7 @@ func (h *Handler) SetUserActive(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
 				"code":    "VALIDATION_ERROR",
-				"message": "invalid request body",
+				"message": "invalid request body:" + err.Error(),
 			},
 		})
 		return

@@ -17,7 +17,7 @@ type Config struct {
 	LogLevel   string
 }
 
-func Load() (*Config, error) {
+func Load() *Config {
 	_ = godotenv.Load()
 
 	config := &Config{
@@ -30,7 +30,7 @@ func Load() (*Config, error) {
 		LogLevel:   getEnv("LOG_LEVEL", "info"),
 	}
 
-	return config, nil
+	return config
 }
 
 func getEnv(key, defaultValue string) string {
