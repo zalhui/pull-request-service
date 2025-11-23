@@ -11,6 +11,10 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	ErrNotFound = errors.New("not found")
+)
+
 type PostgresRepository struct {
 	log *zap.SugaredLogger
 	db  *pgxpool.Pool
@@ -24,18 +28,19 @@ func NewPostgresRepository(log *zap.SugaredLogger, db *pgxpool.Pool) *PostgresRe
 }
 
 func (r *PostgresRepository) CreateTeam(ctx context.Context, team *models.Team) error {
-	err := r.db.QueryRow(ctx, `
-		INSERT INTO teams (team_name) 
-		VALUES ($1)
-	`, team.TeamName)
-
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("CreateTeam: failed to create team: %w", err)
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, `INSERT INTO teams (team_name) VALUES ($1)`, team.TeamName)
+	if err != nil {
+		return fmt.Errorf("insert team: %w", err)
 	}
 
 	//если в команде существующие юзеры->обновление существующего
 	for _, member := range team.Members {
-		err := r.db.QueryRow(ctx, `
+		_, err := tx.Exec(ctx, `
 			INSERT INTO users (user_id, username, team_name, is_active)
 			VALUES ($1, $2, $3, $4)
 			ON CONFLICT (user_id) 
@@ -45,14 +50,22 @@ func (r *PostgresRepository) CreateTeam(ctx context.Context, team *models.Team) 
 				updated_at = NOW()
 		`, member.UserID, member.Username, team.TeamName, member.IsActive)
 		if err != nil {
-			return fmt.Errorf("CreateTeam: failed to create team member: %w", err)
+			return fmt.Errorf("upsert team member %s: %w", member.UserID, err)
 		}
 	}
 
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (r *PostgresRepository) GetTeam(ctx context.Context, teamName string) (*models.Team, error) {
+	exists, err := r.TeamExists(ctx, teamName)
+	if err != nil {
+		return nil, fmt.Errorf("check team existence: %w", err)
+	}
+	if !exists {
+		return nil, ErrNotFound
+	}
+
 	var team models.Team
 	team.TeamName = teamName
 
@@ -60,11 +73,10 @@ func (r *PostgresRepository) GetTeam(ctx context.Context, teamName string) (*mod
 		`SELECT user_id, username, is_active
 		FROM users 
 		WHERE team_name = $1
-		ORDER BY user_id
 	`, teamName)
 
 	if err != nil {
-		return nil, fmt.Errorf("GetTeam: failed to get team: %w", err)
+		return nil, fmt.Errorf("query team members: %w", err)
 	}
 
 	defer rows.Close()
@@ -73,9 +85,13 @@ func (r *PostgresRepository) GetTeam(ctx context.Context, teamName string) (*mod
 		var member models.TeamMember
 		err := rows.Scan(&member.UserID, &member.Username, &member.IsActive)
 		if err != nil {
-			return nil, fmt.Errorf("GetTeam: failed to scan team member: %w", err)
+			return nil, fmt.Errorf("scan team member: %w", err)
 		}
 		team.Members = append(team.Members, member)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration: %w", err)
 	}
 
 	return &team, nil
@@ -88,19 +104,19 @@ func (r *PostgresRepository) TeamExists(ctx context.Context, teamName string) (b
 	`, teamName).Scan(&exists)
 
 	if err != nil {
-		return false, fmt.Errorf("TeamExists: failed to check team exists: %w", err)
+		return false, fmt.Errorf("check team exists: %w", err)
 	}
 	return exists, nil
 }
 
 func (r *PostgresRepository) CreateUser(ctx context.Context, user *models.User) error {
-	err := r.db.QueryRow(ctx, `
+	_, err := r.db.Exec(ctx, `
 		INSERT INTO users (user_id, username, team_name, is_active) 
 		VALUES ($1, $2, $3, $4)
 	`, user.UserID, user.Username, user.TeamName, user.IsActive)
 
 	if err != nil {
-		return fmt.Errorf("CreateUser: failed to create user: %w", err)
+		return fmt.Errorf("insert user: %w", err)
 	}
 
 	return nil
@@ -115,7 +131,10 @@ func (r *PostgresRepository) GetUser(ctx context.Context, userID string) (*model
 	`, userID).Scan(&user.UserID, &user.Username, &user.TeamName, &user.IsActive)
 
 	if err != nil {
-		return nil, fmt.Errorf("GetUser: failed to get user: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get user: %w", err)
 	}
 
 	return &user, nil
@@ -131,7 +150,10 @@ func (r *PostgresRepository) UpdateUserActivity(ctx context.Context, userID stri
 	`, userID, isActive).Scan(&user.UserID, &user.Username, &user.TeamName, &user.IsActive)
 
 	if err != nil {
-		return nil, fmt.Errorf("UpdateUserActivity: failed to update user activity: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("update user activity: %w", err)
 	}
 
 	return &user, nil
@@ -144,20 +166,24 @@ func (r *PostgresRepository) GetActiveTeamMembers(ctx context.Context, teamName 
 		WHERE team_name = $1 AND is_active = true AND user_id != $2
 	`, teamName, excludeUserID)
 
-	defer rows.Close()
-
 	if err != nil {
-		return nil, fmt.Errorf("GetActiveTeamMembers: failed to get active team members: %w", err)
+		return nil, fmt.Errorf("get active team members: %w", err)
 	}
+
+	defer rows.Close()
 
 	var activeMembers []models.User
 	for rows.Next() {
 		var member models.User
 		err := rows.Scan(&member.UserID, &member.Username, &member.TeamName, &member.IsActive)
 		if err != nil {
-			return nil, fmt.Errorf("GetActiveTeamMembers: failed to scan team member: %w", err)
+			return nil, fmt.Errorf("scan team member: %w", err)
 		}
 		activeMembers = append(activeMembers, member)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration: %w", err)
 	}
 
 	return activeMembers, nil
@@ -175,7 +201,7 @@ func (r *PostgresRepository) GetRandomActiveTeamMember(ctx context.Context, team
 	args := []interface{}{teamName}
 
 	if len(excludeUserIDs) > 0 {
-		query += fmt.Sprintf(" AND user_id NOT IN (%s)", placeholders(2, len(excludeUserIDs)+1))
+		query += fmt.Sprintf(" AND user_id NOT IN (%s)", placeholders(2, len(excludeUserIDs)))
 		for _, id := range excludeUserIDs {
 			args = append(args, id)
 		}
@@ -188,33 +214,38 @@ func (r *PostgresRepository) GetRandomActiveTeamMember(ctx context.Context, team
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("GetRandomActiveTeamMember: %w", err)
+		return nil, fmt.Errorf("get random team member: %w", err)
 	}
 	return &user, nil
 }
 
 func (r *PostgresRepository) CreatePullRequest(ctx context.Context, pr *models.PullRequest) error {
-	err := r.db.QueryRow(ctx, `
-		INSERT INTO pull_requests (pr_id, pr_title, author_id, status) 
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO pull_requests (pull_request_id, pull_request_name, author_id, status) 
 		VALUES ($1, $2, $3, $4)
 	`, pr.PullRequestID, pr.PullRequestName, pr.AuthorID, pr.Status)
 
 	if err != nil {
-		return fmt.Errorf("CreatePullRequest: failed to insert pull request: %w", err)
+		return fmt.Errorf("insert pull request: %w", err)
 	}
 
-	for _, reviewer := range pr.AssignedReviewers {
-		err := r.db.QueryRow(ctx, `
-			INSERT INTO reviewers (pull_request_id, user_id)
+	for _, reviewerID := range pr.AssignedReviewers {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO pull_request_reviewers (pull_request_id, user_id)
 			VALUES ($1, $2)
-		`, pr.PullRequestID, reviewer)
+		`, pr.PullRequestID, reviewerID)
 
 		if err != nil {
-			return fmt.Errorf("CreatePullRequest: failed to insert reviewer: %w", err)
+			return fmt.Errorf("insert reviewer %s: %w", reviewerID, err)
 		}
 	}
 
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (r *PostgresRepository) GetPullRequest(ctx context.Context, prID string) (*models.PullRequest, error) {
@@ -226,7 +257,10 @@ func (r *PostgresRepository) GetPullRequest(ctx context.Context, prID string) (*
 	`, prID).Scan(&pr.PullRequestID, &pr.PullRequestName, &pr.AuthorID, &pr.Status, &pr.CreatedAt, &pr.MergedAt)
 
 	if err != nil {
-		return nil, fmt.Errorf("GetPullRequest: failed to get PRs: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get pull requests: %w", err)
 	}
 
 	rows, err := r.db.Query(ctx, `
@@ -236,7 +270,7 @@ func (r *PostgresRepository) GetPullRequest(ctx context.Context, prID string) (*
 	`, prID)
 
 	if err != nil {
-		return nil, fmt.Errorf("GetPullRequest: failed to get PR reviewers: %w", err)
+		return nil, fmt.Errorf("get pr reviewers: %w", err)
 	}
 
 	defer rows.Close()
@@ -244,9 +278,13 @@ func (r *PostgresRepository) GetPullRequest(ctx context.Context, prID string) (*
 	for rows.Next() {
 		var reviewerID string
 		if err := rows.Scan(&reviewerID); err != nil {
-			return nil, fmt.Errorf("GetPullRequest: failed to scan PR reviewers: %w", err)
+			return nil, fmt.Errorf("scan pr reviewers: %w", err)
 		}
 		pr.AssignedReviewers = append(pr.AssignedReviewers, reviewerID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration: %w", err)
 	}
 
 	return &pr, nil
@@ -259,7 +297,7 @@ func (r *PostgresRepository) PullRequestExists(ctx context.Context, prID string)
 	`, prID).Scan(&exists)
 
 	if err != nil {
-		return false, fmt.Errorf("PullRequestExists: failed to check PR exists: %w", err)
+		return false, fmt.Errorf("check pr exists: %w", err)
 	}
 	return exists, nil
 }
@@ -275,44 +313,55 @@ func (r *PostgresRepository) UpdatePRStatus(ctx context.Context, prID string, st
 		RETURNING pull_request_id, pull_request_name, author_id, status, created_at, merged_at
 	`, status, prID).Scan(&pr.PullRequestID, &pr.PullRequestName, &pr.AuthorID,
 		&pr.Status, &pr.CreatedAt, &pr.MergedAt)
+
 	if err != nil {
-		return nil, fmt.Errorf("UpdatePRStatus: failed to update PR status: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("update pr status: %w", err)
 	}
+
 	return &pr, nil
 }
 
 func (r *PostgresRepository) AssignReviewers(ctx context.Context, prID string, reviewerIDs []string) error {
-	err := r.db.QueryRow(ctx, `
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, `
 		DELETE FROM pull_request_reviewers 
 		WHERE pull_request_id = $1
 	`, prID)
 
 	if err != nil {
-		return fmt.Errorf("AssignReviewers: failed to delete PR reviewers: %w", err)
+		return fmt.Errorf("delete reviewers: %w", err)
 	}
 
 	for _, reviewerID := range reviewerIDs {
-		err := r.db.QueryRow(ctx, `
+		_, err := tx.Exec(ctx, `
 			INSERT INTO pull_request_reviewers (pull_request_id, user_id)
 			VALUES ($1, $2)
 		`, prID, reviewerID)
 
 		if err != nil {
-			return fmt.Errorf("AssignReviewers: failed to insert PR reviewer: %w", err)
+			return fmt.Errorf("insert reviewer %s: %w", reviewerID, err)
 		}
 	}
 
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (r *PostgresRepository) ReplaceReviewer(ctx context.Context, prID string, oldReviewerID string, newReviewerID string) error {
-	err := r.db.QueryRow(ctx, `
+	_, err := r.db.Exec(ctx, `
 		UPDATE pull_request_reviewers
 		SET user_id = $1
 		WHERE pull_request_id = $2 AND user_id = $3
 	`, newReviewerID, prID, oldReviewerID)
 	if err != nil {
-		return fmt.Errorf("ReplaceReviewer: failed to replace PR reviewer: %w", err)
+		return fmt.Errorf("replace reviewer: %w", err)
 	}
 	return nil
 }
@@ -327,7 +376,7 @@ func (r *PostgresRepository) GetUserReviewPRs(ctx context.Context, userID string
 	`, userID)
 
 	if err != nil {
-		return nil, fmt.Errorf("GetUserReviewPRs: failed to get PRs: %w", err)
+		return nil, fmt.Errorf("get user review prs: %w", err)
 	}
 
 	defer rows.Close()
@@ -337,10 +386,15 @@ func (r *PostgresRepository) GetUserReviewPRs(ctx context.Context, userID string
 	for rows.Next() {
 		var pr models.PullRequestShort
 		if err := rows.Scan(&pr.PullRequestID, &pr.PullRequestName, &pr.AuthorID, &pr.Status); err != nil {
-			return nil, fmt.Errorf("GetUserReviewPRs: failed to scan PR: %w", err)
+			return nil, fmt.Errorf("scan pr: %w", err)
 		}
 		prs = append(prs, pr)
 	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration: %w", err)
+	}
+
 	return prs, nil
 }
 
