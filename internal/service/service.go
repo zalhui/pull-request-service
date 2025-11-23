@@ -283,3 +283,19 @@ func (s *Service) autoAssignReviewers(ctx context.Context, teamName string, auth
 	s.log.Debugw("Reviewers assigned", "team_name", teamName, "count", len(reviewers))
 	return reviewers, nil
 }
+
+func (s *Service) GetStats(ctx context.Context) (*models.Stats, error) {
+	s.log.Debugw("Getting statistics")
+
+	stats, err := s.repo.GetStats(ctx)
+	if err != nil {
+		s.log.Errorw("Failed to get statistics", "error", err)
+		return nil, fmt.Errorf("get statistics: %w", err)
+	}
+
+	s.log.Debugw("Statistics retrieved",
+		"total_users", stats.TotalUsers,
+		"total_prs", stats.TotalPRs)
+
+	return stats, nil
+}

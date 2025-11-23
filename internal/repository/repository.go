@@ -24,4 +24,6 @@ type Repository interface {
 	AssignReviewers(ctx context.Context, prID string, reviewerIDs []string) error
 	ReplaceReviewer(ctx context.Context, prID string, oldReviewerID string, newReviewerID string) error
 	GetUserReviewPRs(ctx context.Context, userID string) ([]models.PullRequestShort, error)
+
+	GetStats(ctx context.Context) (*models.Stats, error)
 }
